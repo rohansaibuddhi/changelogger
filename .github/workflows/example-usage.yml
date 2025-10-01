@@ -1,0 +1,68 @@
+name: Example Changelog Generation
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      merge_strategy:
+        description: 'Override merge strategy detection'
+        type: choice
+        options:
+          - auto
+          - squash
+          - rebase
+          - merge
+        default: 'auto'
+      since:
+        description: 'Generate changelog since (date YYYY-MM-DD or tag)'
+        required: false
+
+jobs:
+  generate-changelog:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for git operations
+
+      - name: Generate Changelog
+        id: changelog
+        uses: ./  # Use local action for testing, replace with rohansaibuddhi/changelogger@v0.1.0 for production
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          merge_strategy: ${{ github.event.inputs.merge_strategy || 'auto' }}
+          since: ${{ github.event.inputs.since }}
+
+      - name: Comment PR (if this is a PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📝 Generated Changelog Preview
+
+              ${steps.changelog.outputs.changelog}
+
+              ${steps.changelog.outputs.drift_warnings ? '### ⚠️ Documentation Drift Warnings\n' + steps.changelog.outputs.drift_warnings : ''}`
+            })
+
+      - name: Create Release (if this is a release)
+        if: github.event_name == 'release'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: context.payload.release.id,
+              body: `${context.payload.release.body}\n\n---\n\n${steps.changelog.outputs.changelog}`
+            })

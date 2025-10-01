@@ -1,0 +1,33 @@
+name: "Changelogger"
+description: "AI-powered changelog generator with documentation drift detection"
+author: "Rohan Sai Buddhi"
+
+inputs:
+  openai_api_key:
+    description: "OpenAI API key for changelog generation"
+    required: true
+  merge_strategy:
+    description: "How PRs are merged: auto|squash|rebase|merge"
+    required: false
+    default: "auto"
+  since:
+    description: "Generate changelog since this date (YYYY-MM-DD) or tag. Defaults to last release"
+    required: false
+  github_token:
+    description: "GitHub token for API access"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  changelog:
+    description: "Generated changelog content"
+  drift_warnings:
+    description: "Documentation drift warnings"
+
+runs:
+  using: "node16"
+  main: "dist/index.js"
+
+branding:
+  icon: "file-text"
+  color: "blue"
