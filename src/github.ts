@@ -34,20 +34,21 @@ export class GitHubClient {
   }
 
   async collectPRs(since: string): Promise<PullRequest[]> {
-    const sinceDate = new Date(since).toISOString().split('T')[0];
+    const sinceDate = new Date(since);
 
-    // Search for merged PRs since the given date
-    const { data: searchResults } = await this.octokit.rest.search.issuesAndPullRequests({
-      q: `repo:${this.owner}/${this.repo} is:pr is:merged merged:>=${sinceDate}`,
-      sort: 'created',
-      order: 'desc',
-      per_page: 100
-    });
+    try {
+      // Try search API first (works for public repos)
+      const { data: searchResults } = await this.octokit.rest.search.issuesAndPullRequests({
+        q: `repo:${this.owner}/${this.repo} is:pr is:merged merged:>=${sinceDate.toISOString().split('T')[0]}`,
+        sort: 'created',
+        order: 'desc',
+        per_page: 100
+      });
 
-    const prs: PullRequest[] = [];
+      const prs: PullRequest[] = [];
 
-    for (const item of searchResults.items) {
-      if (!item.pull_request) continue;
+      for (const item of searchResults.items) {
+        if (!item.pull_request) continue;
 
       // Get detailed PR information
       const { data: pr } = await this.octokit.rest.pulls.get({
@@ -62,14 +63,57 @@ export class GitHubClient {
       // Detect merge strategy
       const mergeStrategy = await this.detectMergeStrategy(pr);
 
+        prs.push({
+          number: item.number,
+          title: item.title,
+          body: item.body || null,
+          labels: item.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name): name is string => name !== undefined) || [],
+          files,
+          merge_strategy: mergeStrategy,
+          author: item.user?.login || 'unknown',
+          merged_at: pr.merged_at || '',
+          merge_commit_sha: pr.merge_commit_sha || ''
+        });
+      }
+
+      return prs;
+    } catch (error) {
+      console.log('Search API failed, falling back to direct PR listing method');
+      return this.collectPRsFallback(sinceDate);
+    }
+  }
+
+  private async collectPRsFallback(sinceDate: Date): Promise<PullRequest[]> {
+    // Fallback: List all PRs and filter locally
+    const { data: allPrs } = await this.octokit.rest.pulls.list({
+      owner: this.owner,
+      repo: this.repo,
+      state: 'closed',
+      sort: 'updated',
+      direction: 'desc',
+      per_page: 100
+    });
+
+    const prs: PullRequest[] = [];
+
+    for (const pr of allPrs) {
+      // Skip if not merged or merged before since date
+      if (!pr.merged_at || new Date(pr.merged_at) < sinceDate) continue;
+
+      // Get PR files
+      const files = await this.getPRFiles(pr.number);
+
+      // Detect merge strategy
+      const mergeStrategy = await this.detectMergeStrategy(pr);
+
       prs.push({
-        number: item.number,
-        title: item.title,
-        body: item.body || null,
-        labels: item.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name): name is string => name !== undefined) || [],
+        number: pr.number,
+        title: pr.title,
+        body: pr.body || null,
+        labels: pr.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name): name is string => name !== undefined) || [],
         files,
         merge_strategy: mergeStrategy,
-        author: item.user?.login || 'unknown',
+        author: pr.user?.login || 'unknown',
         merged_at: pr.merged_at || '',
         merge_commit_sha: pr.merge_commit_sha || ''
       });

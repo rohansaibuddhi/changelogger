@@ -28,36 +28,75 @@ class GitHubClient {
         return thirtyDaysAgo.toISOString();
     }
     async collectPRs(since) {
-        const sinceDate = new Date(since).toISOString().split('T')[0];
-        // Search for merged PRs since the given date
-        const { data: searchResults } = await this.octokit.rest.search.issuesAndPullRequests({
-            q: `repo:${this.owner}/${this.repo} is:pr is:merged merged:>=${sinceDate}`,
-            sort: 'created',
-            order: 'desc',
+        const sinceDate = new Date(since);
+        try {
+            // Try search API first (works for public repos)
+            const { data: searchResults } = await this.octokit.rest.search.issuesAndPullRequests({
+                q: `repo:${this.owner}/${this.repo} is:pr is:merged merged:>=${sinceDate.toISOString().split('T')[0]}`,
+                sort: 'created',
+                order: 'desc',
+                per_page: 100
+            });
+            const prs = [];
+            for (const item of searchResults.items) {
+                if (!item.pull_request)
+                    continue;
+                // Get detailed PR information
+                const { data: pr } = await this.octokit.rest.pulls.get({
+                    owner: this.owner,
+                    repo: this.repo,
+                    pull_number: item.number
+                });
+                // Get PR files
+                const files = await this.getPRFiles(item.number);
+                // Detect merge strategy
+                const mergeStrategy = await this.detectMergeStrategy(pr);
+                prs.push({
+                    number: item.number,
+                    title: item.title,
+                    body: item.body || null,
+                    labels: item.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name) => name !== undefined) || [],
+                    files,
+                    merge_strategy: mergeStrategy,
+                    author: item.user?.login || 'unknown',
+                    merged_at: pr.merged_at || '',
+                    merge_commit_sha: pr.merge_commit_sha || ''
+                });
+            }
+            return prs;
+        }
+        catch (error) {
+            console.log('Search API failed, falling back to direct PR listing method');
+            return this.collectPRsFallback(sinceDate);
+        }
+    }
+    async collectPRsFallback(sinceDate) {
+        // Fallback: List all PRs and filter locally
+        const { data: allPrs } = await this.octokit.rest.pulls.list({
+            owner: this.owner,
+            repo: this.repo,
+            state: 'closed',
+            sort: 'updated',
+            direction: 'desc',
             per_page: 100
         });
         const prs = [];
-        for (const item of searchResults.items) {
-            if (!item.pull_request)
+        for (const pr of allPrs) {
+            // Skip if not merged or merged before since date
+            if (!pr.merged_at || new Date(pr.merged_at) < sinceDate)
                 continue;
-            // Get detailed PR information
-            const { data: pr } = await this.octokit.rest.pulls.get({
-                owner: this.owner,
-                repo: this.repo,
-                pull_number: item.number
-            });
             // Get PR files
-            const files = await this.getPRFiles(item.number);
+            const files = await this.getPRFiles(pr.number);
             // Detect merge strategy
             const mergeStrategy = await this.detectMergeStrategy(pr);
             prs.push({
-                number: item.number,
-                title: item.title,
-                body: item.body || null,
-                labels: item.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name) => name !== undefined) || [],
+                number: pr.number,
+                title: pr.title,
+                body: pr.body || null,
+                labels: pr.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name) => name !== undefined) || [],
                 files,
                 merge_strategy: mergeStrategy,
-                author: item.user?.login || 'unknown',
+                author: pr.user?.login || 'unknown',
                 merged_at: pr.merged_at || '',
                 merge_commit_sha: pr.merge_commit_sha || ''
             });

@@ -6,6 +6,7 @@ export declare class GitHubClient {
     constructor(token: string, owner: string, repo: string);
     getLastReleaseDate(): Promise<string>;
     collectPRs(since: string): Promise<PullRequest[]>;
+    private collectPRsFallback;
     getPRFiles(prNumber: number): Promise<FileChange[]>;
     private detectMergeStrategy;
     createOrUpdateChangelog(content: string): Promise<void>;
