@@ -80,7 +80,7 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist  # Commented out - GitHub Actions need the built files
 
 # Gatsby files
 .cache/
