@@ -36,49 +36,57 @@ export class GitHubClient {
   async collectPRs(since: string): Promise<PullRequest[]> {
     const sinceDate = new Date(since);
 
+    // Skip search API entirely - it doesn't work for private repos
+    // Use git commit analysis instead (like git-cliff does)
+    console.log('Using git-based PR collection (avoids GitHub API limitations)');
+    return this.collectPRsFromGit(sinceDate);
+  }
+
+  private async collectPRsFromGit(sinceDate: Date): Promise<PullRequest[]> {
+    // Use git log to get commits since the date, then extract PR info from commit messages
+    // This avoids GitHub API permission issues entirely
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+
     try {
-      // Try search API first (works for public repos)
-      const { data: searchResults } = await this.octokit.rest.search.issuesAndPullRequests({
-        q: `repo:${this.owner}/${this.repo} is:pr is:merged merged:>=${sinceDate.toISOString().split('T')[0]}`,
-        sort: 'created',
-        order: 'desc',
-        per_page: 100
-      });
+      // Get git log since date with PR merge commits
+      const gitCommand = `git log --since="${sinceDate.toISOString()}" --grep="Merge pull request" --oneline --format="%H|%s|%an|%ad" --date=iso`;
+      const { stdout } = await execAsync(gitCommand);
 
       const prs: PullRequest[] = [];
+      const lines = stdout.trim().split('\n').filter((line: string) => line.length > 0);
 
-      for (const item of searchResults.items) {
-        if (!item.pull_request) continue;
+      for (const line of lines) {
+        const [hash, message, author, date] = line.split('|');
 
-      // Get detailed PR information
-      const { data: pr } = await this.octokit.rest.pulls.get({
-        owner: this.owner,
-        repo: this.repo,
-        pull_number: item.number
-      });
+        // Extract PR number from merge commit message
+        const prMatch = message.match(/Merge pull request #(\d+)/);
+        if (!prMatch) continue;
 
-      // Get PR files
-      const files = await this.getPRFiles(item.number);
+        const prNumber = parseInt(prMatch[1]);
 
-      // Detect merge strategy
-      const mergeStrategy = await this.detectMergeStrategy(pr);
+        // Extract title from commit message
+        const titleMatch = message.match(/Merge pull request #\d+ from [^/]+\/(.+)/);
+        const title = titleMatch ? titleMatch[1].replace(/-/g, ' ') : message;
 
         prs.push({
-          number: item.number,
-          title: item.title,
-          body: item.body || null,
-          labels: item.labels?.map(label => typeof label === 'string' ? label : label.name).filter((name): name is string => name !== undefined) || [],
-          files,
-          merge_strategy: mergeStrategy,
-          author: item.user?.login || 'unknown',
-          merged_at: pr.merged_at || '',
-          merge_commit_sha: pr.merge_commit_sha || ''
+          number: prNumber,
+          title: title,
+          body: null,
+          labels: [],
+          files: [],
+          merge_strategy: 'merge' as const,
+          author: author,
+          merged_at: date,
+          merge_commit_sha: hash
         });
       }
 
+      console.log(`Found ${prs.length} merged PRs from git log`);
       return prs;
     } catch (error) {
-      console.log('Search API failed, falling back to direct PR listing method');
+      console.log('Git-based collection failed, falling back to API method');
       return this.collectPRsFallback(sinceDate);
     }
   }
